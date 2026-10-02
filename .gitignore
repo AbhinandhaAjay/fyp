@@ -1,0 +1,8 @@
+# Recordings, calibration videos and extracted features: private (webcam footage)
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

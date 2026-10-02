@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Webcam Input Processing</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385;
+    --border: #e2e5eb; --accent: #2f6fde; --rec: #d93a3a; --ok: #2e9b5f; --warn: #c98a12;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171d; --panel: #1c2028; --text: #e6e9ef; --muted: #8f97a8;
+            --border: #2c323d; --accent: #5b8ff0; --rec: #f0605d; --ok: #4cc283; --warn: #e3a93a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .video-wrap { position: relative; aspect-ratio: 4/3; background: #000; border-radius: 8px; overflow: hidden; }
+  video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  .placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: #9aa; }
+  .badge { position: absolute; top: 10px; left: 10px; background: var(--rec); color: #fff;
+           padding: 3px 10px; border-radius: 99px; font-weight: 600; font-size: 12px; display: none; }
+  .badge.on { display: block; animation: pulse 1.4s infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+           background: var(--panel); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.rec { background: var(--rec); border-color: var(--rec); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  label { color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  input[type=range] { width: 120px; }
+  .progress { height: 6px; background: var(--border); border-radius: 99px; margin-top: 12px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0; background: var(--rec); transition: width .2s linear; }
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .stat { border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+  .stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  .pipeline { color: var(--muted); font-size: 12px; margin-top: 14px; line-height: 1.7; }
+  .pipeline code { color: var(--text); }
+  h2 { font-size: 15px; margin: 24px 0 10px; }
+  #windows { display: grid; gap: 10px; }
+  .win { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .win-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; border: 1px solid currentColor; }
+  .queued { color: var(--muted); } .processing { color: var(--warn); }
+  .done { color: var(--ok); } .error { color: var(--rec); }
+  .kv { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+  .kv b { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
+  canvas { width: 100%; height: 70px; margin-top: 8px; display: block; }
+  .legend { font-size: 11.5px; color: var(--muted); display: flex; gap: 12px; }
+  .legend i { display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin-right: 4px; }
+  a { color: var(--accent); }
+  .err { color: var(--rec); margin-top: 8px; }
+  .link-btn { padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 12.5px; }
+  .vec-wrap { margin-top: 10px; max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .vec { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .vec th, .vec td { padding: 4px 8px; text-align: right; border-bottom: 1px solid var(--border); }
+  .vec thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; color: var(--muted); font-weight: 600; }
+  .vec th:first-child, .vec td:first-child { position: sticky; left: 0; background: var(--panel); }
+  .vec thead th:first-child { z-index: 2; }
+  .vec tr.noface td { color: var(--muted); }
+  .vec tr.padded td { color: var(--muted); text-decoration: line-through; opacity: .6; }
+  .vec td.mask { font-weight: 600; text-decoration: none; }
+  .calstatus { margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .calstatus b.good { color: var(--ok); } .calstatus b.fair { color: var(--warn); }
+  .calstatus b.poor, .calstatus b.stale { color: var(--rec); }
+  .gazemap-wrap { display: flex; gap: 12px; align-items: flex-start; margin-top: 10px; flex-wrap: wrap; }
+  canvas.gazemap { width: 260px; height: auto; margin: 0; border-radius: 6px; }
+  .gazemap-note { font-size: 12px; color: var(--muted); max-width: 520px; }
+  .vec .grp { text-align: center; color: var(--text); border-left: 1px solid var(--border); }
+  .live { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+  .live b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .activity { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
+  @media (max-width: 800px) { .activity { grid-template-columns: 1fr; } }
+  .passage { height: 220px; overflow: auto; padding-right: 8px; }
+  .passage p { margin: 0 0 10px; }
+  textarea { width: 100%; min-height: 110px; font: inherit; padding: 8px; border-radius: 8px;
+             border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical; }
+  .quiz { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .quiz button.picked { border-color: var(--accent); color: var(--accent); }
+  .panel h3 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
+  .kv .sep { flex-basis: 100%; height: 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Webcam Input Processing</h1>
+  <p class="sub">Input stage: the webcam, keyboard and mouse/touchpad are recorded in windows. Each window becomes a gaze + head-pose sequence plus a behaviour vector.</p>
+
+  <div class="grid">
+    <section class="panel">
+      <div class="video-wrap">
+        <video id="video" autoplay playsinline muted></video>
+        <div class="placeholder" id="placeholder">Camera off</div>
+        <div class="badge" id="recBadge">● REC</div>
+      </div>
+      <div class="controls">
+        <button id="camBtn" class="primary">Start camera</button>
+        <button id="calBtn" disabled>Calibrate gaze</button>
+        <button id="recBtn" class="rec" disabled>Start recording</button>
+        <label>Window <input type="range" id="interval" min="15" max="30" step="5" value="15"> <span id="intervalVal">15 s</span></label>
+      </div>
+      <div class="progress"><div id="bar"></div></div>
+      <div class="calstatus" id="calStatus">Screen gaze: <b>not calibrated</b>. Calibrate to estimate where on the page you look.</div>
+      <div class="err" id="err"></div>
+    </section>
+
+    <section class="panel">
+      <div class="stats">
+        <div class="stat"><b id="sWin">0</b><span>windows sent</span></div>
+        <div class="stat"><b id="sDone">0</b><span>processed</span></div>
+        <div class="stat"><b id="sTime">0:00</b><span>recording time</span></div>
+        <div class="stat"><b id="sNext">–</b><span>next window in</span></div>
+      </div>
+      <div class="pipeline">
+        <code>window video</code> → frames @ <span id="fps">10</span> fps → MediaPipe Face Landmarker →<br>
+        per frame: <code>eye landmarks → gaze</code>, <code>face transform → head pose</code> →<br>
+        sequence <code>(T × <span id="dim">29</span>)</code> saved as <code>.npz</code><br>
+        keyboard + pointer + focus events → behaviour vector <code>(41)</code>, no key content stored<br>
+        spelling checked in your browser; only counts are sent<br>
+        after calibration: gaze + head pose → <code>screen_x, screen_y</code> per frame<br>
+        Session: <code id="sid">–</code>
+      </div>
+      <div class="live" id="live">
+        <span>This window:</span>
+        <span>keys <b id="lKeys">0</b></span><span>corrections <b id="lCorr">0</b></span>
+        <span>clicks <b id="lClicks">0</b></span><span>scrolls <b id="lScroll">0</b></span><span>zooms <b id="lZoom">0</b></span>
+        <span>tab switches <b id="lTabs">0</b></span>
+        <span>words <b id="lWords">0</b></span><span>misspelled <b id="lMiss">0</b></span>
+        <span>spell checker <b id="lSpell">loading</b></span>
+      </div>
+    </section>
+  </div>
+
+  <div class="activity" data-spell-vocab>
+    <section class="panel">
+      <h3>Practice activity: read and scroll</h3>
+      <div class="passage" tabindex="0" data-aoi="passage">
+        <p><b>How rain forms.</b> Water is always on the move. Heat from the sun warms oceans, lakes and rivers,
+        and some of that water turns into vapour, an invisible gas that rises into the air. This step is called evaporation.</p>
+        <p>Plants add to it too. They pull water up from the soil through their roots and release vapour through tiny
+        openings in their leaves. This is called transpiration, and a single large tree can release hundreds of litres on a hot day.</p>
+        <p>As warm, moist air rises it cools. Cool air cannot hold as much vapour, so the vapour condenses onto tiny
+        specks of dust, salt or smoke, forming droplets. Billions of these droplets together make a cloud.</p>
+        <p>Inside a cloud, droplets bump into each other and join. When they grow too heavy for the rising air to hold
+        them up, they fall as precipitation: rain, or snow and hail when it is cold enough.</p>
+        <p>Rain that reaches the ground either soaks into the soil, becoming groundwater, or flows over the surface into
+        streams and rivers. Eventually most of it returns to the sea, where the sun warms it again.</p>
+        <p>Because the same water keeps cycling, the water you drink today may once have fallen as rain thousands of
+        years ago. The total amount of water on Earth stays almost the same; it only changes form and place.</p>
+      </div>
+    </section>
+    <section class="panel">
+      <h3>Answer in your own words</h3>
+      <textarea id="answer" data-aoi="answer" placeholder="Why do clouds form when warm air rises?"></textarea>
+      <h3 style="margin-top:10px">Which step turns liquid water into vapour?</h3>
+      <div class="quiz" id="quiz" data-aoi="quiz">
+        <button>Condensation</button><button>Evaporation</button><button>Precipitation</button><button>Runoff</button>
+      </div>
+    </section>
+  </div>
+
+  <h2>Processed windows</h2>
+  <div id="windows"><p class="sub">Nothing yet. Start the camera, then start recording.</p></div>
+</main>
+
+<script src="behavior.js"></script>
+<script src="spelling.js"></script>
+<script src="calibration.js"></script>
+<script>
+for (const b of document.querySelectorAll("#quiz button"))
+  b.onclick = () => { document.querySelectorAll("#quiz button").forEach(x => x.classList.remove("picked")); b.classList.add("picked"); };
+const $ = id => document.getElementById(id);
+let stream = null, recorder = null, recording = false, sessionId = null;
+let windowIdx = 0, windowStart = 0, recStart = 0, segTimer = null, tick = null, poll = null;
+
+const mime = ["video/webm;codecs=vp8", "video/webm;codecs=vp9", "video/webm", "video/mp4"]
+  .find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
+
+$("interval").oninput = e => $("intervalVal").textContent = e.target.value + " s";
+const windowSec = () => +$("interval").value;
+const showErr = msg => $("err").textContent = msg || "";
+
+$("camBtn").onclick = async () => {
+  if (stream) { stopRecording(); stream.getTracks().forEach(t => t.stop()); stream = null;
+    $("video").srcObject = null; $("placeholder").style.display = "";
+    $("camBtn").textContent = "Start camera"; $("recBtn").disabled = true; $("calBtn").disabled = true; return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }, audio: false });
+    $("video").srcObject = stream; $("placeholder").style.display = "none";
+    $("camBtn").textContent = "Stop camera"; $("recBtn").disabled = false; $("calBtn").disabled = false; showErr();
+  } catch (e) { showErr("Could not open camera: " + e.message); }
+};
+
+$("recBtn").onclick = () => recording ? stopRecording() : startRecording();
+
+// ---- gaze calibration -------------------------------------------------------
+let calibration = null;
+const calStale = () => calibration &&
+  (Math.abs(innerWidth - calibration.viewport[0]) > 4 || Math.abs(innerHeight - calibration.viewport[1]) > 4);
+
+function updateCalStatus() {
+  const el = $("calStatus");
+  if (!calibration) {
+    el.innerHTML = "Screen gaze: <b>not calibrated</b>. Calibrate to estimate where on the page you look.";
+  } else if (calStale()) {
+    el.innerHTML = `Screen gaze: <b class="stale">window size changed since calibrating</b>.
+      New recordings won't use it; calibrate again.`;
+  } else {
+    el.innerHTML = `Screen gaze: <b class="${calibration.quality}">calibrated, ${calibration.quality}</b>
+      · test-dot error ${Math.round(calibration.validation_error_px)} px
+      (${calibration.validation_error_pct_of_diagonal.toFixed(1)}% of screen). Don't move or resize the window.`;
+  }
+}
+addEventListener("resize", updateCalStatus);
+
+$("calBtn").onclick = async () => {
+  if (!stream || recording) return;
+  $("calBtn").disabled = $("recBtn").disabled = true;
+  try {
+    const r = await Calibration.run(stream);
+    if (r) calibration = r;
+  } finally {
+    $("calBtn").disabled = $("recBtn").disabled = !stream;
+    updateCalStatus();
+  }
+};
+
+async function startRecording() {
+  try {
+    const calId = calibration && !calStale() ? calibration.id : null;
+    const r = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" },
+                                             body: JSON.stringify({ calibration_id: calId }) });
+    const s = await r.json();
+    sessionId = s.session_id; $("sid").textContent = sessionId;
+    // The page is served fresh from disk, but Python code only reloads on restart
+    const expected = BEHAVIOR_GROUPS.flatMap(([, names]) => names);
+    if (!s.behavior_features || s.behavior_features.join() !== expected.join())
+      showErr("The server is running older code than this page, so keyboard/mouse data won't be saved. " +
+              "Restart it: Ctrl+C in its terminal, then python app.py.");
+    else showErr();
+    $("fps").textContent = s.target_fps; $("dim").textContent = s.feature_names.length;
+  } catch (e) { return showErr("Backend not reachable: " + e.message); }
+  recording = true; windowIdx = 0; recStart = Date.now();
+  $("windows").innerHTML = ""; $("sWin").textContent = 0; $("sDone").textContent = 0;
+  $("recBtn").textContent = "Stop recording"; $("recBadge").classList.add("on");
+  $("interval").disabled = true; $("calBtn").disabled = true;
+  Behavior.start();
+  startSegment();
+  tick = setInterval(updateClock, 200);
+  poll = setInterval(refresh, 1500);
+}
+
+function stopRecording() {
+  if (!recording) return;
+  recording = false;
+  clearTimeout(segTimer); clearInterval(tick);
+  endSegment(Behavior.stop());  // flushes the partial window
+  $("recBtn").textContent = "Start recording"; $("recBadge").classList.remove("on");
+  $("interval").disabled = false; $("bar").style.width = "0"; $("sNext").textContent = "–";
+  $("calBtn").disabled = !stream;
+  setTimeout(() => clearInterval(poll), 120000); // keep polling until backlog finishes
+}
+
+// Each window gets its own MediaRecorder so every upload is a standalone, decodable file.
+// Keyboard/pointer events are cut at the same moment, so both streams cover the same window.
+function startSegment() {
+  const chunks = [], idx = windowIdx++, started = Date.now(), len = windowSec();
+  windowStart = started;
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 2_000_000 } : undefined);
+  recorder = rec;
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  rec.onstop = () => {
+    const secs = (rec.endedAt - started) / 1000;
+    upload(new Blob(chunks, { type: rec.mimeType || mime }), idx, secs, len, started, rec.events);
+  };
+  rec.start(1000);
+  segTimer = setTimeout(() => {
+    if (!recording) return;
+    endSegment(Behavior.cut());
+    startSegment();
+  }, len * 1000);
+}
+
+function endSegment(events) {
+  if (!recorder || recorder.state === "inactive") return;
+  recorder.events = events;
+  recorder.endedAt = Date.now();
+  recorder.stop();
+}
+
+async function upload(blob, idx, secs, len, started, events) {
+  if (secs < 2) return; // ignore tiny tail fragments
+  const fd = new FormData();
+  fd.append("video", blob, `window_${idx}.webm`);
+  fd.append("index", idx);
+  fd.append("window_seconds", len);                    // fixed rows = len × fps
+  fd.append("recorded_seconds", Math.min(secs, len).toFixed(2));
+  fd.append("started_at", started / 1000);
+  if (events) fd.append("events", JSON.stringify(events));
+  $("sWin").textContent = +$("sWin").textContent + 1;
+  try {
+    await fetch(`/api/sessions/${sessionId}/windows`, { method: "POST", body: fd });
+    refresh();
+  } catch (e) { showErr("Upload failed: " + e.message); }
+}
+
+function updateClock() {
+  const t = (Date.now() - recStart) / 1000;
+  $("sTime").textContent = `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+  const w = (Date.now() - windowStart) / 1000;
+  $("bar").style.width = Math.min(100, (w / windowSec()) * 100) + "%";
+  $("sNext").textContent = Math.max(0, Math.ceil(windowSec() - w)) + " s";
+  const l = Behavior.live();
+  $("lKeys").textContent = l.keys; $("lCorr").textContent = l.corrections;
+  $("lClicks").textContent = l.clicks; $("lScroll").textContent = l.scrolls; $("lZoom").textContent = l.zooms; $("lTabs").textContent = l.tab_switches;
+  $("lWords").textContent = l.words ?? "–"; $("lMiss").textContent = l.misspelled ?? "–"; $("lSpell").textContent = l.spell_status ?? "off";
+}
+
+async function refresh() {
+  if (!sessionId) return;
+  const list = await fetch(`/api/sessions/${sessionId}/windows`).then(r => r.json()).catch(() => null);
+  if (!list) return;
+  $("sDone").textContent = list.filter(w => w.status === "done").length;
+  const box = $("windows");
+  for (const w of list.slice().reverse()) {
+    let el = document.getElementById("w" + w.index);
+    if (!el) { el = document.createElement("div"); el.className = "win"; el.id = "w" + w.index;
+      box.prepend(el); }
+    if (el.dataset.status === w.status) continue;
+    el.dataset.status = w.status;
+    el.innerHTML = renderWindow(w);
+    if (w.status === "done") {
+      drawSpark(el.querySelector("canvas.spark"), w.preview);
+      if (w.calibration) drawGazeMap(el.querySelector("canvas.gazemap"), w);
+    }
+  }
+  // keep newest first
+  [...box.children].sort((a, b) => +b.id.slice(1) - +a.id.slice(1)).forEach(n => box.appendChild(n));
+}
+
+const pct = v => v == null ? "–" : Math.round(v * 100) + "%";
+const num = (v, d = 1) => v == null ? "–" : (+v).toFixed(d);
+
+function renderWindow(w) {
+  const head = `<div class="win-head"><strong>Window #${w.index}</strong>
+    <span class="pill ${w.status}">${w.status}</span></div>`;
+  if (w.status === "error") return head + `<div class="err">${w.error}</div>`;
+  if (w.status !== "done") return head + `<div class="kv">${(w.bytes / 1024).toFixed(0)} KB uploaded · ${w.recorded_seconds}s</div>`;
+  const s = w.summary, b = w.behavior;
+  winInfo[w.index] = w;
+  const beh = !b ? `<span>no keyboard/pointer data</span>` : `
+      <span class="sep"></span>
+      <span>keyboard <b>${b.key_count}</b> keys · <b>${num(b.typing_speed_burst)}</b> keys/s while typing ·
+        corrections <b>${pct(b.correction_ratio)}</b> (${b.backspace_count + b.delete_count}, longest run ${b.max_correction_run}) ·
+        pauses <b>${b.pause_count}</b></span>
+      <span class="sep"></span>
+      <span>pointer <b>${b.click_count}</b> clicks (${b.rapid_click_count} rapid) · scrolls <b>${b.scroll_gestures ?? b.scroll_events}</b>
+        (${b.scroll_reversals} reversals${b.zoom_gestures ? `, ${b.zoom_gestures} zooms` : ""}) · moved <b>${num(b.distance_norm)}</b> screens ·
+        straightness ${num(b.path_straightness, 2)}</span>
+      <span>focus <b>${b.tab_switches}</b> tab switches · away <b>${pct(b.hidden_ratio)}</b></span>
+      <span class="sep"></span>
+      <span>spelling ${!w.has_spelling ? "<b>not checked</b> (spell checker wasn't ready)" :
+        `<b>${b.misspelled_words}</b> misspelled of ${b.words_typed} words (${pct(b.misspelling_ratio)}) ·
+        fixed <b>${b.misspellings_fixed}</b> · left in text <b>${b.misspellings_remaining}</b>`}</span>`;
+  return head + `
+    <div class="kv">
+      <span>model input <b>${w.shape_fixed.join(" × ")}</b> + mask</span>
+      <span>observed <b>${w.observed_steps}/${w.shape_fixed[0]}</b> steps</span>
+      <span>raw frames <b>${w.shape[0]}</b></span>
+      <span>face visible <b>${pct(s.face_presence_ratio)}</b></span>
+      <span>off-screen <b>${pct(s.off_screen_ratio)}</b></span>
+      <span>yaw <b>${num(s.head_yaw_mean)}°</b> ± ${num(s.head_yaw_std)}</span>
+      <span>pitch <b>${num(s.head_pitch_mean)}°</b> ± ${num(s.head_pitch_std)}</span>
+      <span>blinks <b>${s.blink_count ?? "–"}</b> (${num(s.blink_rate_per_min, 0)}/min)</span>
+      <span>fixations <b>${s.fixation_count ?? "–"}</b> · mean ${num(s.fixation_mean_duration_s, 2)}s</span>
+      <span>processed in <b>${w.processing_seconds}s</b></span>
+      ${beh}
+      <span class="sep"></span>
+      <a href="/api/sessions/${sessionId}/windows/${w.index}/npz">download .npz</a>
+      <button class="link-btn" onclick="toggleVectors(this, ${w.index})">show vectors</button>
+      <button class="link-btn" onclick="toggleVectors(this, ${w.index}, 'raw')">show raw frames</button>
+      ${b ? `<button class="link-btn" onclick="toggleVectors(this, ${w.index}, 'behavior')">show behaviour vector</button>` : ""}
+    </div>
+    <div class="vec-slot"></div>
+    ${w.calibration ? `<div class="gazemap-wrap"><canvas class="gazemap"></canvas>
+      <div class="gazemap-note"><b>Where you looked on the page</b> (calibration ${w.calibration.quality},
+        ±${w.calibration.error_px} px). The box is the browser window; dots outside it are looks off the page.<br>
+        looking off-page <b>${pct(s.offscreen_ratio_calibrated)}</b> · average position
+        (${num(s.screen_x_mean, 2)}, ${num(s.screen_y_mean, 2)})${aoiNote(w.aoi)}</div></div>` :
+      `<div class="gazemap-note" style="margin-top:8px">No screen gaze for this recording (not calibrated).</div>`}
+    <canvas class="spark"></canvas>
+    <div class="legend"><span><i style="background:#2f6fde"></i>gaze_h</span>
+      <span><i style="background:#2e9b5f"></i>gaze_v</span>
+      <span><i style="background:#c98a12"></i>head yaw /90</span>
+      <span><i style="background:#d93a3a"></i>head pitch /90</span></div>`;
+}
+
+const winInfo = {};
+const BEHAVIOR_GROUPS = [
+  ["Keyboard", ["key_count", "keys_per_sec", "typing_speed_burst", "typing_active_ratio", "iki_mean_s", "iki_std_s",
+    "dwell_mean_s", "dwell_std_s", "backspace_count", "delete_count", "correction_ratio", "max_correction_run",
+    "correction_episodes", "enter_count", "pause_count", "longest_key_pause_s", "held_key_repeats"]],
+  ["Pointer", ["move_events", "distance_norm", "speed_mean", "speed_std", "speed_max", "direction_changes",
+    "path_straightness", "pointer_active_ratio", "longest_pointer_idle_s", "click_count", "rapid_click_count",
+    "scroll_gestures", "scroll_distance_norm", "scroll_reversals", "zoom_gestures", "touch_ratio"]],
+  ["Focus", ["tab_switches", "hidden_ratio", "window_blur_count"]],
+  ["Spelling", ["words_typed", "misspelled_words", "misspelling_ratio", "misspellings_fixed",
+    "misspellings_remaining"]]];
+
+function behaviorTable(b) {
+  const n = Object.keys(b).length;
+  const cols = BEHAVIOR_GROUPS.map(([g, names]) => `<table class="vec"><thead><tr><th colspan="2" class="grp">${g} (${names.length})</th></tr></thead><tbody>` +
+    names.filter(k => k in b).map(k => `<tr><td style="text-align:left">${k}</td><td>${Number.isInteger(b[k]) ? b[k] : (+b[k]).toFixed(3)}</td></tr>`).join("") +
+    "</tbody></table>").join("");
+  return `<div class="kv"><span>Behaviour vector: <b>1 × ${n}</b> for this window, computed from keyboard, pointer and focus event timings.
+      No key content is stored.</span></div>
+    <div class="vec-wrap" style="display:flex; gap:16px; align-items:flex-start; padding:4px">${cols}</div>`;
+}
+
+const GROUPS = [["", n => n === "face_present"], ["Head pose", n => n.startsWith("head_")],
+  ["Gaze", n => /iris|gaze_/.test(n)], ["Eye openness", n => n.endsWith("_ear")],
+  ["Eye blendshapes", n => n.startsWith("bs_")], ["Screen gaze", n => n.startsWith("screen_")]];
+
+async function toggleVectors(btn, idx, kind = "fixed") {
+  const card = btn.closest(".win"), slot = card.querySelector(".vec-slot");
+  const label = kind === "raw" ? "show raw frames" : kind === "behavior" ? "show behaviour vector" : "show vectors";
+  const open = slot.dataset.kind === kind;
+  card.querySelectorAll(".link-btn").forEach(b => b.textContent = b.textContent.replace("hide", "show"));
+  slot.innerHTML = ""; slot.dataset.kind = "";
+  if (open) return;
+  if (kind === "behavior") {
+    slot.innerHTML = behaviorTable(winInfo[idx].behavior);
+    slot.dataset.kind = kind; btn.textContent = label.replace("show", "hide"); return;
+  }
+  btn.textContent = "loading…";
+  try {
+    const r = await fetch(`/api/sessions/${sessionId}/windows/${idx}/vectors?kind=${kind}`);
+    if (!r.ok) throw new Error(r.status);
+    slot.innerHTML = vectorTable(await r.json());
+    slot.dataset.kind = kind;
+    btn.textContent = label.replace("show", "hide");
+  } catch (e) { btn.textContent = label; slot.innerHTML = `<div class="err">Could not load vectors (${e.message})</div>`; }
+}
+
+function vectorTable({ kind, feature_names: names, timestamps_ms: ts, rows, mask }) {
+  const hasMask = Array.isArray(mask);
+  const groupRow = GROUPS.map(([label, f]) => {
+    const n = names.filter(f).length;
+    return n ? `<th class="grp" colspan="${n}">${label}</th>` : "";
+  }).join("");
+  const head = names.map(n => `<th>${n.replace(/^bs_/, "")}</th>`).join("");
+  const body = rows.map((row, i) => {
+    const padded = hasMask && !mask[i];
+    const cls = padded ? ' class="padded"' : row[0] < 0.5 ? ' class="noface"' : "";
+    const cells = row.map(v => `<td>${Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(3)}</td>`).join("");
+    const m = hasMask ? `<td class="mask">${mask[i]}</td>` : "";
+    return `<tr${cls}><td>${(ts[i] / 1000).toFixed(1)}</td>${m}${cells}</tr>`;
+  }).join("");
+  const observed = hasMask ? mask.reduce((a, b) => a + b, 0) : rows.length;
+  const note = hasMask
+    ? `Model input: <b>${rows.length}</b> steps × <b>${names.length}</b> features on a uniform ${(ts[1] - ts[0] || 100).toFixed(0)} ms grid,
+       interpolated from real frames by timestamp. <b>${observed}</b> steps are observed (mask 1);
+       <b>${rows.length - observed}</b> are padding (mask 0, struck through). Grey rows: no face detected (still a real observation).`
+    : `Raw frames: <b>${rows.length}</b> real frames × <b>${names.length}</b> features at their actual timestamps
+       (not evenly spaced). Grey rows: no face detected.`;
+  const maskHead = hasMask ? "<th>mask</th>" : "";
+  return `<div class="kv"><span>${note}</span></div>
+    <div class="vec-wrap"><table class="vec">
+      <thead><tr><th></th>${hasMask ? "<th></th>" : ""}${groupRow}</tr><tr><th>t (s)</th>${maskHead}${head}</tr></thead>
+      <tbody>${body}</tbody></table></div>`;
+}
+
+// Region colours (by order the page lists them), plus elsewhere / off-page
+const AOI_COLORS = ["#2f6fde", "#2e9b5f", "#c98a12", "#8e5bd8", "#d24d8c", "#1d9aa8"];
+const aoiColor = (aoi, label) => label === "offpage" ? "#d93a3a" : label === "other" || !aoi || !label
+  ? "#8f97a8" : AOI_COLORS[Math.max(0, aoi.names.indexOf(label)) % AOI_COLORS.length];
+
+function aoiNote(a) {
+  if (!a) return "";
+  const parts = a.names.map(n => `<span style="color:${aoiColor(a, n)}">■</span> ${n} <b>${pct(a.dwell[n])}</b>`);
+  parts.push(`<span style="color:${aoiColor(a, "other")}">■</span> elsewhere <b>${pct(a.other_ratio)}</b>`);
+  parts.push(`<span style="color:${aoiColor(a, "offpage")}">■</span> off-page <b>${pct(a.offpage_ratio)}</b>`);
+  return `<br><br><b>Areas of interest</b>: ${parts.join(" · ")}<br>
+    ${a.aoi_visits} visits · ${a.aoi_switches} switches between areas · ${a.aoi_revisits} revisits ·
+    longest visit ${num(a.longest_visit_s)} s · spread ${num(a.aoi_entropy, 2)}`;
+}
+
+function drawGazeMap(cv, w) {
+  const [vw, vh] = w.calibration.viewport, pad = 0.35;      // show a margin around the window
+  const W = 260, H = Math.round(W * vh / vw);
+  const dpr = devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + "px";
+  const g = cv.getContext("2d"); g.scale(dpr, dpr);
+  const css = getComputedStyle(document.body);
+  const X = x => (x + pad) / (1 + 2 * pad) * W, Y = y => (y + pad) / (1 + 2 * pad) * H;
+  g.fillStyle = css.getPropertyValue("--bg"); g.fillRect(0, 0, W, H);
+  g.strokeStyle = css.getPropertyValue("--muted"); g.lineWidth = 1.5;
+  g.strokeRect(X(0), Y(0), X(1) - X(0), Y(1) - Y(0));
+  if (w.aoi) {                                   // regions, as they were at the end of the window
+    g.font = "10px system-ui, sans-serif";
+    for (const [name, boxes] of Object.entries(w.aoi.rects)) {
+      g.strokeStyle = g.fillStyle = aoiColor(w.aoi, name); g.lineWidth = 1;
+      for (const [x0, y0, x1, y1] of boxes) {
+        g.setLineDash([3, 2]); g.strokeRect(X(x0), Y(y0), X(x1) - X(x0), Y(y1) - Y(y0)); g.setLineDash([]);
+        g.fillText(name, X(x0) + 2, Y(y0) + 10);
+      }
+    }
+  }
+  g.globalAlpha = 0.45;
+  for (const [x, y, label] of w.screen_points || []) {
+    g.fillStyle = w.aoi ? aoiColor(w.aoi, label) : "#2f6fde";
+    g.beginPath(); g.arc(X(Math.max(-pad, Math.min(1 + pad, x))), Y(Math.max(-pad, Math.min(1 + pad, y))), 3, 0, 7); g.fill();
+  }
+  g.globalAlpha = 1;
+}
+
+function drawSpark(cv, p) {
+  if (!p || !p.t) return;
+  const dpr = devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d"); g.scale(dpr, dpr);
+  g.strokeStyle = getComputedStyle(document.body).getPropertyValue("--border"); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
+  const series = [[p.gaze_h, 1, "#2f6fde"], [p.gaze_v, 1, "#2e9b5f"],
+                  [p.yaw, 1 / 90, "#c98a12"], [p.pitch, 1 / 90, "#d93a3a"]];
+  const n = p.t.length;
+  for (const [vals, k, col] of series) {
+    g.strokeStyle = col; g.lineWidth = 1.5; g.beginPath();
+    let pen = false;
+    vals.forEach((v, i) => {
+      if (!p.face[i]) { pen = false; return; }
+      const x = n > 1 ? (i / (n - 1)) * W : W / 2;
+      const y = H / 2 - Math.max(-1, Math.min(1, v * k * 2.5)) * (H / 2 - 3);
+      pen ? g.lineTo(x, y) : g.moveTo(x, y); pen = true;
+    });
+    g.stroke();
+  }
+}
+</script>
+</body>
+</html>
